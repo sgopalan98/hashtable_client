@@ -50,7 +50,7 @@ fn main() {
                 println!("The value for {} is {}", key_str.trim(), value);
             }
             else if operation.trim().eq("PUT") {
-                println!("{}", value);
+                println!("{}", value.trim());
             }
         }
         else {
