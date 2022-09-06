@@ -1,63 +1,86 @@
 use std::io::prelude::*;
-use std::io;
+use std::time::{Instant, Duration};
+use std::thread;
 use std::net::TcpStream;
 use std::io::BufReader;
 
 fn main() {
-    
-    let server: String = std::env::args().nth(1).expect("No server given");
+    let now = Instant::now();
+    let server = "0.0.0.0:7878";
+    let no_of_threads = 100;
 
-    // Create a infinite loop
-    loop {
+    let mut put_threads = vec![];
+    for i in 0..no_of_threads {
+        put_threads.push(thread::spawn(move || {
+            let sleep_millis = no_of_threads - i;
+            thread::sleep(Duration::from_millis(sleep_millis));
+            let key = i;
+            let value = i;
+            let command = format!("PUT {} {}\n", key, value);
 
-        let mut command = String::new();
+            //Send command
+            let mut stream = TcpStream::connect(server).unwrap();
+            stream.write(command.as_bytes()).unwrap();
+            
+            let mut reader = BufReader::new(&stream);
+            let mut error_code = String::new();
+            reader.read_line(&mut error_code).unwrap();
 
-        // Get the input - for command
-        let mut operation = String::new();
-        io::stdin().read_line(&mut operation).expect("Failed to readline");
-        
-
-        let mut key_str = String::new();
-        io::stdin().read_line(&mut key_str).expect("Failed to readline");
-        if operation.trim().eq("PUT"){
-            // get the value to be inserted
-            let mut value_str = String::new();
-            io::stdin().read_line(&mut value_str).expect("Failed to readline");
-            command = format!("{} {} {}\n",operation.trim(), key_str.trim(), value_str.trim());
-        }
-        else if operation.trim().eq("GET") {
-            command = format!("{} {}\n",operation.trim(), key_str.trim());
-        }
-        else{ 
-            // Print wrong command and start from first;
-            println!("Enter correct operation - Either PUT or GET");
-            continue;
-        }
-        let mut stream = TcpStream::connect(server.clone()).unwrap();
-        // Send the commands
-        stream.write(command.as_bytes()).unwrap();
-
-        // Parse and display the output.
-        let mut reader = BufReader::new(&stream);
-        let mut error_code = String::new();
-        reader.read_line(&mut error_code).unwrap();
-        // Check error code
-        if error_code.trim().parse::<i32>().unwrap() == 0 {
-            println!("Suceeded");
-            let mut value = String::new();
-            reader.read_line(&mut value).unwrap();
-            if operation.trim().eq("GET") {
-                println!("The value for {} is {}", key_str.trim(), value);
+            // Check error code
+            if error_code.trim().parse::<i32>().unwrap() == 0 {
+                let mut value = String::new();
+                reader.read_line(&mut value).unwrap();
             }
-            else if operation.trim().eq("PUT") {
-                println!("{}", value.trim());
+            else {
+                let mut error_value = String::new();
+                reader.read_line(&mut error_value).unwrap();
+                error_value.trim().parse::<i32>().unwrap();
             }
-        }
-        else {
-            println!("FAILED");
-            let mut error_value = String::new();
-            reader.read_line(&mut error_value).unwrap();
-            println!("{}", error_value);
-        }
+        }));
     }
+    
+    for thread in put_threads {
+        // Wait for the thread to finish. Returns a result.
+        let _ = thread.join();
+    }
+    let elapsed = now.elapsed();
+    println!("PUT elapsed: {:.2?}", elapsed);
+
+    thread::sleep(Duration::from_secs(2));
+
+    let mut get_threads = vec![];
+    for i in 0..no_of_threads {
+        get_threads.push(thread::spawn(move || {
+            let sleep_millis = no_of_threads - i;
+            thread::sleep(Duration::from_millis(sleep_millis));
+            let key = i;
+            let command = format!("GET {}\n", key);
+            //Send command
+            let mut stream = TcpStream::connect(server).unwrap();
+            stream.write(command.as_bytes()).unwrap();
+            
+            let mut reader = BufReader::new(&stream);
+            let mut error_code = String::new();
+            reader.read_line(&mut error_code).unwrap();
+            // Check error code
+            if error_code.trim().parse::<i32>().unwrap() == 0 {
+                let mut value = String::new();
+                reader.read_line(&mut value).unwrap();
+                assert!(value.trim().parse::<i32>().unwrap() == i.try_into().unwrap(), "value = {} i = {}", value.trim().parse::<i32>().unwrap(), i);
+            }
+            else {
+                let mut error_value = String::new();
+                reader.read_line(&mut error_value).unwrap();
+                error_value.trim().parse::<i32>().unwrap();
+            }
+        }));
+    }
+
+    for thread in get_threads {
+        // Wait for the thread to finish. Returns a result.
+        let _ = thread.join();
+    }
+
+    let elapsed = now.elapsed();
+    println!("Total Elapsed: {:.2?}", elapsed);
 }
