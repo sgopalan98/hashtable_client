@@ -1,24 +1,30 @@
-use std::io::prelude::*;
+use std::io::{prelude::*, BufWriter};
 use std::time::{Instant, Duration};
-use std::{thread, error};
+use std::{thread, error, fs};
 use std::net::TcpStream;
 use std::io::BufReader;
 
-fn main() {
-    let now = Instant::now();
-    let server = "0.0.0.0:7878";
-    let no_of_threads = 2; // No of hyperthreads
-    let no_of_items = 50000;
+fn evaluate_hashtable(server: &'static str, no_of_threads: usize, no_of_items: usize, get_per_put: i32) -> Duration {
     let items_per_thread = no_of_items / no_of_threads;
     let iterations = 10;
     let items_per_iteration = items_per_thread / iterations;
-    let get_per_put = 10;
     let mut threads = vec![];
+    let now = Instant::now();
     for thread_no in 0..no_of_threads {
         threads.push(thread::spawn(move || {
-
-
-            
+            let stream = loop{
+                let error_code = TcpStream::connect(server);
+                match error_code {
+                  Ok(stream) => break stream,
+                  Err(_) => {
+                    println!("Connection Failed");
+                    continue;
+                  },
+                }
+            };
+            let stream_clone = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut writer = BufWriter::new(stream_clone);
             for iteration in 0..iterations {
 
                 let base = thread_no * items_per_thread + iteration * items_per_iteration;
@@ -26,45 +32,30 @@ fn main() {
 
                 // PUT
                 for key in base..end {
-                    let mut stream = loop{
-                        let error_code = TcpStream::connect(server);
-                        match error_code {
-                          Ok(stream) => break stream,
-                          Err(_) => {
-                            println!("Connection Failed");
-                            continue;
-                          },
-                        }
-                    };
                     let command = format!("PUT {} {}\n", key, key);
-                    stream.write(command.as_bytes()).unwrap();
+                    writer.write(command.as_bytes()).unwrap();
+                    writer.flush().unwrap();
 
-
-                    let mut reader = BufReader::new(&stream);
                     let mut error_code = String::new();
                     reader.read_line(&mut error_code).unwrap();
+                    if error_code.trim().parse::<i32>().unwrap() == 0 {
+                        let mut value = String::new();
+                        reader.read_line(&mut value).unwrap();
+                    }
+                    else {
+                        let mut error_value = String::new();
+                        reader.read_line(&mut error_value).unwrap();
+                        println!("FAILED DUE TO {}\n", error_value);
+                    }
                 }
 
-                println!("For thread {} PUT for iteration {} completed\n", thread_no, iteration + 1);
                 
                 // GET
                 for get_index in 0..get_per_put {
                     for key in base..end {
-                        let mut stream = loop{
-                            let error_code = TcpStream::connect(server);
-                            match error_code {
-                              Ok(stream) => break stream,
-                              Err(_) => {
-                                println!("Connection Failed");
-                                continue;
-                              },
-                            }
-                        };
                         let command = format!("GET {}\n", key);
-                        stream.write(command.as_bytes()).unwrap();
-
-
-                        let mut reader = BufReader::new(&stream);
+                        writer.write(command.as_bytes()).unwrap();
+                        writer.flush().unwrap();
                         let mut error_code = String::new();
                         reader.read_line(&mut error_code).unwrap();
                         if error_code.trim().parse::<i32>().unwrap() == 0 {
@@ -75,13 +66,16 @@ fn main() {
                         else {
                             let mut error_value = String::new();
                             reader.read_line(&mut error_value).unwrap();
+                            println!("FAILED DUE TO {}", error_value);
                             error_value.trim().parse::<i32>().unwrap();
                         }
                     }
-                    println!("For thread {} get iteration {} completed\n", thread_no, get_index);
                 }
                 println!("For thread {} iteration {} completed\n", thread_no, iteration);
             }
+            let command = format!("CLOSE");
+            writer.write(command.as_bytes()).unwrap();
+            writer.flush().unwrap();
         }));
     }
     
@@ -91,5 +85,26 @@ fn main() {
     }
 
     let elapsed = now.elapsed();
-    println!("Total elapsed: {:.2?}", elapsed);
+    return elapsed;
+}
+
+fn main() {
+    let server: &'static str = "0.0.0.0:7878";
+    let no_of_threads = 4; // No of hyperthreads
+    let no_of_items: usize = 100000;
+    let mut elapsed_duration = vec![];
+    let get_per_puts: Vec<i32> = (1..=10).collect();
+    for get_per_put in get_per_puts {
+        elapsed_duration.push(evaluate_hashtable(server, no_of_threads, no_of_items, get_per_put));
+    }
+    let mut file_output:String = "".to_owned();
+    for (index, duration) in elapsed_duration.iter().enumerate() {
+        let no_of_operations = no_of_items + no_of_items * (index + 1);
+        println!("TIME TAKEN {:?}", duration.as_micros());
+        let throughput = no_of_operations * i32::pow(10, 6) as usize / duration.as_micros() as usize;
+        println!("THROUGHPUT {}", throughput);
+        let output_string = format!("{},{:?}\n", index + 1, throughput);
+        file_output.push_str(&output_string);
+    }
+    fs::write("output.txt", file_output).unwrap();
 }
