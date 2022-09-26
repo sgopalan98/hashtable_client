@@ -91,6 +91,27 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
     }
 
     let elapsed = now.elapsed();
+    let t = thread::spawn(move || {
+
+        let stream = loop{
+            let error_code = TcpStream::connect(server);
+            match error_code {
+              Ok(stream) => break stream,
+              Err(_) => {
+                println!("Connection Failed");
+                continue;
+              },
+            }
+        };
+        let stream_clone = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut writer = BufWriter::new(stream_clone);
+        let command = "RESET 0";
+        writer.write(command.as_bytes()).unwrap();
+        writer.flush().unwrap();
+    });
+
+    t.join().unwrap();
     return elapsed;
 }
 
