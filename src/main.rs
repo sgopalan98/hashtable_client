@@ -1,4 +1,5 @@
 use plotters::prelude::*;
+use std::fs::read;
 use std::io::{prelude::*, BufWriter};
 use std::sync::Arc;
 use std::time::{Instant, Duration};
@@ -18,7 +19,7 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
     for thread_no in 0..no_of_threads {
         let input = Arc::clone(&arc_input); 
         threads.push(thread::spawn(move || {
-            let stream = loop{
+            let mut stream = loop{
                 let error_code = TcpStream::connect(server);
                 match error_code {
                   Ok(stream) => break stream,
@@ -29,8 +30,22 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
                 }
             };
             let stream_clone = stream.try_clone().unwrap();
-            let mut reader = BufReader::new(stream);
-            let mut writer = BufWriter::new(stream_clone);
+            // SEPERATE THREAD FOR READING THE VALUES.
+            let reading = thread::spawn(move || {
+                let mut reader = BufReader::new(stream_clone);
+                loop {
+                    let mut output = String::new();
+                    let result = reader.read_line(&mut output);
+                    match result {
+                        Ok(_) => {
+                            if output.trim().eq("CLOSE") {
+                                return;
+                            }
+                        }
+                        Err(_) => continue
+                    };
+                }
+            });
             for iteration in 0..iterations {
 
                 let base = thread_no * items_per_thread + iteration * items_per_iteration;
@@ -39,20 +54,8 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
                 // PUT
                 for key in thread_input {
                     let command = format!("PUT {} {}\n", key, key);
-                    writer.write(command.as_bytes()).unwrap();
-                    writer.flush().unwrap();
-
-                    let mut error_code = String::new();
-                    reader.read_line(&mut error_code).unwrap();
-                    if error_code.trim().parse::<i32>().unwrap() == 0 {
-                        let mut value = String::new();
-                        reader.read_line(&mut value).unwrap();
-                    }
-                    else {
-                        let mut error_value = String::new();
-                        reader.read_line(&mut error_value).unwrap();
-                        println!("FAILED DUE TO {}\n", error_value);
-                    }
+                    stream.write(command.as_bytes()).unwrap();
+                    stream.flush();
                 }
 
                 
@@ -60,28 +63,18 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
                 for _ in 0..get_per_put {
                     for key in thread_input {
                         let command = format!("GET {}\n", key);
-                        writer.write(command.as_bytes()).unwrap();
-                        writer.flush().unwrap();
-                        let mut error_code = String::new();
-                        reader.read_line(&mut error_code).unwrap();
-                        if error_code.trim().parse::<i32>().unwrap() == 0 {
-                            let mut value = String::new();
-                            reader.read_line(&mut value).unwrap();
-                            assert!(value.trim().parse::<usize>().unwrap() == *key, "value = {} actual = {}", value.trim().parse::<i32>().unwrap(), key);
-                        }
-                        else {
-                            let mut error_value = String::new();
-                            reader.read_line(&mut error_value).unwrap();
-                            println!("FAILED DUE TO {}", error_value);
-                            error_value.trim().parse::<i32>().unwrap();
-                        }
+                        stream.write(command.as_bytes()).unwrap();
+                        stream.flush();
+                        // writer.write(command.as_bytes()).unwrap();
+                        // writer.flush().unwrap();
                     }
                 }
-                println!("For thread {} iteration {} completed\n", thread_no, iteration);
             }
-            let command = format!("CLOSE");
-            writer.write(command.as_bytes()).unwrap();
-            writer.flush().unwrap();
+            let command = format!("CLOSE\n");
+            stream.write(command.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            reading.join().unwrap();
+            println!("GET/PUT {} done!", get_per_put);
         }));
     }
     
@@ -103,8 +96,8 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
               },
             }
         };
+        stream.set_nonblocking(true).unwrap();
         let stream_clone = stream.try_clone().unwrap();
-        let mut reader = BufReader::new(stream);
         let mut writer = BufWriter::new(stream_clone);
         let command = "RESET 0";
         writer.write(command.as_bytes()).unwrap();
@@ -116,7 +109,7 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
 }
 
 
-fn generate_throughput_graph(data: Vec<(f64, usize)>, label: &str, path: &str) {
+fn generate_throughput_graph(data: Vec<(f64, f64)>, label: &str, path: &str) {
     // Drawing area
     let root = BitMapBackend::new(path, (640, 480)).into_drawing_area();
     root.fill(&WHITE).unwrap();
@@ -125,13 +118,13 @@ fn generate_throughput_graph(data: Vec<(f64, usize)>, label: &str, path: &str) {
         .margin(5)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d(0..100, 0..10000).unwrap();
+        .build_cartesian_2d(0.0..100.0, 0.0..1.0).unwrap();
 
     chart.configure_mesh().draw().unwrap();
     
     // Drawing line
     chart
-        .draw_series(LineSeries::new(data.iter().map(|pair| (pair.0 as i32, pair.1 as i32)), BLUE.filled()).point_size(4)).unwrap();
+        .draw_series(LineSeries::new(data.iter().map(|pair| (pair.0 as f64, pair.1 as f64)), BLUE.filled()).point_size(4)).unwrap();
 
     chart
         .configure_series_labels()
@@ -165,7 +158,7 @@ fn main() {
     for (index, duration) in elapsed_duration.iter().enumerate() {
         let no_of_operations = no_of_items + no_of_items * (index + 1);
         println!("TIME TAKEN {:?}", duration.as_micros());
-        let throughput = no_of_operations * i32::pow(10, 6) as usize / duration.as_micros() as usize;
+        let throughput = no_of_operations as f64 / duration.as_micros() as f64;
         println!("THROUGHPUT {}", throughput);
         throughput_values.push((100.0 / get_per_puts.clone()[index] as f64, throughput));
         println!("THE % put is {}", 100.0 / get_per_puts.clone()[index] as f64);
@@ -183,7 +176,7 @@ fn main() {
     for (index, duration) in elapsed_duration.iter().enumerate() {
         let no_of_operations = no_of_items + no_of_items * (index + 1);
         println!("TIME TAKEN {:?}", duration.as_micros());
-        let throughput = no_of_operations * i32::pow(10, 6) as usize / duration.as_micros() as usize;
+        let throughput = no_of_operations as f64 / duration.as_micros() as f64;
         println!("THROUGHPUT {}", throughput);
         // Append through put values
         throughput_values.push((100.0 / get_per_puts.clone()[index] as f64, throughput));
