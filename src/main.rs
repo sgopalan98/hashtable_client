@@ -77,11 +77,11 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
                         }
                     }
                 }
-                println!("For thread {} iteration {} completed\n", thread_no, iteration);
             }
             let command = format!("CLOSE");
             writer.write(command.as_bytes()).unwrap();
             writer.flush().unwrap();
+            println!("GET/PUT {} done!", get_per_put);
         }));
     }
     
@@ -116,7 +116,7 @@ fn evaluate_hashtable(server: &'static str, no_of_threads: usize, input_vector: 
 }
 
 
-fn generate_throughput_graph(data: Vec<(f64, usize)>, label: &str, path: &str) {
+fn generate_throughput_graph(data: Vec<(f64, f64)>, label: &str, path: &str) {
     // Drawing area
     let root = BitMapBackend::new(path, (640, 480)).into_drawing_area();
     root.fill(&WHITE).unwrap();
@@ -125,13 +125,13 @@ fn generate_throughput_graph(data: Vec<(f64, usize)>, label: &str, path: &str) {
         .margin(5)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d(0..100, 0..10000).unwrap();
+        .build_cartesian_2d(0.0..100.0, 0.0..1.0).unwrap();
 
     chart.configure_mesh().draw().unwrap();
     
     // Drawing line
     chart
-        .draw_series(LineSeries::new(data.iter().map(|pair| (pair.0 as i32, pair.1 as i32)), BLUE.filled()).point_size(4)).unwrap();
+        .draw_series(LineSeries::new(data.iter().map(|pair| (pair.0 as f64, pair.1 as f64)), BLUE.filled()).point_size(4)).unwrap();
 
     chart
         .configure_series_labels()
@@ -165,7 +165,7 @@ fn main() {
     for (index, duration) in elapsed_duration.iter().enumerate() {
         let no_of_operations = no_of_items + no_of_items * (index + 1);
         println!("TIME TAKEN {:?}", duration.as_micros());
-        let throughput = no_of_operations * i32::pow(10, 6) as usize / duration.as_micros() as usize;
+        let throughput = no_of_operations as f64 / duration.as_micros() as f64;
         println!("THROUGHPUT {}", throughput);
         throughput_values.push((100.0 / get_per_puts.clone()[index] as f64, throughput));
         println!("THE % put is {}", 100.0 / get_per_puts.clone()[index] as f64);
@@ -183,7 +183,7 @@ fn main() {
     for (index, duration) in elapsed_duration.iter().enumerate() {
         let no_of_operations = no_of_items + no_of_items * (index + 1);
         println!("TIME TAKEN {:?}", duration.as_micros());
-        let throughput = no_of_operations * i32::pow(10, 6) as usize / duration.as_micros() as usize;
+        let throughput = no_of_operations as f64 / duration.as_micros() as f64;
         println!("THROUGHPUT {}", throughput);
         // Append through put values
         throughput_values.push((100.0 / get_per_puts.clone()[index] as f64, throughput));
